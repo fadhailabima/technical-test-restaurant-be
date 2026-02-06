@@ -379,7 +379,8 @@
                 </div>
                 <div class="info-row">
                     <div class="info-label">Table Number:</div>
-                    <div class="info-value">{{ $order->table->table_number }} (Capacity: {{ $order->table->capacity }} persons)</div>
+                    <div class="info-value">{{ $order->table->table_number }} (Capacity: {{ $order->table->capacity }}
+                        persons)</div>
                 </div>
                 <div class="info-row">
                     <div class="info-label">Served By:</div>
@@ -428,7 +429,8 @@
                             </td>
                             <td class="text-right">Rp {{ number_format($item->price, 0, ',', '.') }}</td>
                             <td class="text-center">{{ $item->quantity }}</td>
-                            <td class="text-right"><strong>Rp {{ number_format($item->subtotal, 0, ',', '.') }}</strong></td>
+                            <td class="text-right"><strong>Rp
+                                    {{ number_format($item->subtotal, 0, ',', '.') }}</strong></td>
                         </tr>
                     @endforeach
                 </tbody>
@@ -439,8 +441,8 @@
         <div class="payment-section">
             <div class="section-title">Payment Information</div>
             <div class="payment-methods">
-                @if($order->payments && $order->payments->count() > 0)
-                    @foreach($order->payments as $payment)
+                @if ($order->payments && $order->payments->count() > 0)
+                    @foreach ($order->payments as $payment)
                         <div class="payment-item">
                             <div class="payment-method">
                                 <strong>{{ strtoupper($payment->payment_method) }}</strong>
@@ -452,7 +454,7 @@
                                 <span class="badge badge-success">{{ ucfirst($payment->status) }}</span>
                             </div>
                         </div>
-                        @if($payment->reference_number)
+                        @if ($payment->reference_number)
                             <div style="padding-left: 120px; font-size: 10px; color: #6c757d; margin-top: 3px;">
                                 Ref: {{ $payment->reference_number }}
                             </div>
