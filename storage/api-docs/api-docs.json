@@ -232,7 +232,7 @@
                 "requestBody": {
                     "required": true,
                     "content": {
-                        "multipart/form-data": {
+                        "application/json": {
                             "schema": {
                                 "required": [
                                     "name",
@@ -260,10 +260,6 @@
                                             "snack",
                                             "dessert"
                                         ]
-                                    },
-                                    "image": {
-                                        "type": "string",
-                                        "format": "binary"
                                     },
                                     "is_available": {
                                         "type": "boolean",
@@ -334,7 +330,7 @@
                 "requestBody": {
                     "required": true,
                     "content": {
-                        "multipart/form-data": {
+                        "application/json": {
                             "schema": {
                                 "properties": {
                                     "name": {
@@ -354,10 +350,6 @@
                                             "snack",
                                             "dessert"
                                         ]
-                                    },
-                                    "image": {
-                                        "type": "string",
-                                        "format": "binary"
                                     },
                                     "is_available": {
                                         "type": "boolean"
@@ -481,6 +473,30 @@
                                     "table_id": {
                                         "type": "integer",
                                         "example": 1
+                                    },
+                                    "customer_name": {
+                                        "type": "string",
+                                        "example": "Samuel"
+                                    },
+                                    "items": {
+                                        "type": "array",
+                                        "items": {
+                                            "properties": {
+                                                "menu_id": {
+                                                    "type": "integer",
+                                                    "example": 1
+                                                },
+                                                "quantity": {
+                                                    "type": "integer",
+                                                    "example": 2
+                                                },
+                                                "notes": {
+                                                    "type": "string",
+                                                    "example": "pedas"
+                                                }
+                                            },
+                                            "type": "object"
+                                        }
                                     }
                                 },
                                 "type": "object"
@@ -736,6 +752,196 @@
                 ]
             }
         },
+        "/api/order-sessions": {
+            "get": {
+                "tags": [
+                    "Order Sessions"
+                ],
+                "summary": "Get all order sessions",
+                "operationId": "ce5ff6779bc6eee1a0cffdf5e53d0ad7",
+                "parameters": [
+                    {
+                        "name": "status",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string",
+                            "enum": [
+                                "active",
+                                "completed",
+                                "cancelled"
+                            ]
+                        }
+                    },
+                    {
+                        "name": "table_id",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "integer"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Session list retrieved successfully"
+                    }
+                },
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ]
+            }
+        },
+        "/api/order-sessions/{session}": {
+            "get": {
+                "tags": [
+                    "Order Sessions"
+                ],
+                "summary": "Get session details",
+                "operationId": "e5ee7e989897d05dd849b87eb7152ec8",
+                "parameters": [
+                    {
+                        "name": "session",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Session details retrieved successfully"
+                    }
+                },
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ]
+            }
+        },
+        "/api/order-sessions/{session}/complete": {
+            "post": {
+                "tags": [
+                    "Order Sessions"
+                ],
+                "summary": "Complete a session (close all orders and mark table available)",
+                "operationId": "c89c98674dc8a266941f6d8cbc3fd02b",
+                "parameters": [
+                    {
+                        "name": "session",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Session completed successfully"
+                    }
+                },
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ]
+            }
+        },
+        "/api/order-sessions/{session}/receipt": {
+            "get": {
+                "tags": [
+                    "Order Sessions"
+                ],
+                "summary": "Generate session receipt PDF",
+                "operationId": "b9ae02c3f0cb06e4d0ac568a27240a6c",
+                "parameters": [
+                    {
+                        "name": "session",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Receipt PDF generated successfully"
+                    }
+                },
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ]
+            }
+        },
+        "/api/payments/bulk": {
+            "post": {
+                "tags": [
+                    "Payments"
+                ],
+                "summary": "Pay all orders in a session (customer) at once",
+                "operationId": "c9b28d502c56730096648be7274d36f5",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "required": [
+                                    "session_id",
+                                    "payment_method",
+                                    "amount"
+                                ],
+                                "properties": {
+                                    "session_id": {
+                                        "description": "Order session ID",
+                                        "type": "integer"
+                                    },
+                                    "payment_method": {
+                                        "type": "string",
+                                        "enum": [
+                                            "cash",
+                                            "card",
+                                            "qris",
+                                            "gopay",
+                                            "ovo",
+                                            "dana"
+                                        ]
+                                    },
+                                    "amount": {
+                                        "type": "number",
+                                        "example": 300000
+                                    },
+                                    "reference_number": {
+                                        "type": "string"
+                                    },
+                                    "notes": {
+                                        "type": "string"
+                                    }
+                                },
+                                "type": "object"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Bulk payment processed successfully"
+                    }
+                },
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ]
+            }
+        },
         "/api/orders/{order}/payments": {
             "get": {
                 "tags": [
@@ -829,6 +1035,56 @@
                 ]
             }
         },
+        "/api/payments": {
+            "get": {
+                "tags": [
+                    "Payments"
+                ],
+                "summary": "Get all payments grouped by order session",
+                "operationId": "04dbb925224062e0860708f76fa0f817",
+                "parameters": [
+                    {
+                        "name": "date",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string",
+                            "format": "date"
+                        }
+                    },
+                    {
+                        "name": "payment_method",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "name": "status",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string",
+                            "enum": [
+                                "completed",
+                                "refunded"
+                            ]
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Payments retrieved successfully"
+                    }
+                },
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ]
+            }
+        },
         "/api/orders/{order}/payments/{payment}/refund": {
             "post": {
                 "tags": [
@@ -876,6 +1132,25 @@
                 "responses": {
                     "200": {
                         "description": "Payment refunded successfully"
+                    }
+                },
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ]
+            }
+        },
+        "/api/reports/dashboard": {
+            "get": {
+                "tags": [
+                    "Reports"
+                ],
+                "summary": "Get dashboard overview with real-time data",
+                "operationId": "e5e449324212ac61c759ff8da23a6b24",
+                "responses": {
+                    "200": {
+                        "description": "Dashboard data retrieved successfully"
                     }
                 },
                 "security": [
@@ -1332,6 +1607,10 @@
         {
             "name": "Reports",
             "description": "Analytics & reporting"
+        },
+        {
+            "name": "Order Sessions",
+            "description": "Order Sessions"
         }
     ]
 }
