@@ -3,8 +3,8 @@
 namespace App\Http\Controllers;
 
 use App\Models\Menu;
+use App\Http\Requests\StoreMenuRequest;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Storage;
 use OpenApi\Attributes as OA;
 
 class MenuController extends Controller
@@ -58,7 +58,7 @@ class MenuController extends Controller
         requestBody: new OA\RequestBody(
             required: true,
             content: new OA\MediaType(
-                mediaType: "multipart/form-data",
+                mediaType: "application/json",
                 schema: new OA\Schema(
                     required: ["name", "price", "category"],
                     properties: [
@@ -66,7 +66,6 @@ class MenuController extends Controller
                         new OA\Property(property: "description", type: "string", example: "Nasi goreng spesial"),
                         new OA\Property(property: "price", type: "number", example: 25000),
                         new OA\Property(property: "category", type: "string", enum: ["makanan", "minuman", "snack", "dessert"]),
-                        new OA\Property(property: "image", type: "string", format: "binary"),
                         new OA\Property(property: "is_available", type: "boolean", example: true)
                     ]
                 )
@@ -76,22 +75,9 @@ class MenuController extends Controller
             new OA\Response(response: 201, description: "Menu created successfully")
         ]
     )]
-    public function store(Request $request)
+    public function store(StoreMenuRequest $request)
     {
-        $validated = $request->validate([
-            'name' => 'required|string|max:255',
-            'description' => 'nullable|string',
-            'price' => 'required|numeric|min:0',
-            'category' => 'required|in:makanan,minuman,snack,dessert',
-            'image' => 'nullable|image|max:2048',
-            'is_available' => 'boolean',
-        ]);
-
-        if ($request->hasFile('image')) {
-            $validated['image'] = $request->file('image')->store('menus', 'public');
-        }
-
-        $menu = Menu::create($validated);
+        $menu = Menu::create($request->validated());
 
         return response()->json([
             'success' => true,
@@ -131,14 +117,13 @@ class MenuController extends Controller
         requestBody: new OA\RequestBody(
             required: true,
             content: new OA\MediaType(
-                mediaType: "multipart/form-data",
+                mediaType: "application/json",
                 schema: new OA\Schema(
                     properties: [
                         new OA\Property(property: "name", type: "string"),
                         new OA\Property(property: "description", type: "string"),
                         new OA\Property(property: "price", type: "number"),
                         new OA\Property(property: "category", type: "string", enum: ["makanan", "minuman", "snack", "dessert"]),
-                        new OA\Property(property: "image", type: "string", format: "binary"),
                         new OA\Property(property: "is_available", type: "boolean")
                     ]
                 )
@@ -148,26 +133,9 @@ class MenuController extends Controller
             new OA\Response(response: 200, description: "Menu updated successfully")
         ]
     )]
-    public function update(Request $request, Menu $menu)
+    public function update(StoreMenuRequest $request, Menu $menu)
     {
-        $validated = $request->validate([
-            'name' => 'sometimes|required|string|max:255',
-            'description' => 'nullable|string',
-            'price' => 'sometimes|required|numeric|min:0',
-            'category' => 'sometimes|required|in:makanan,minuman,snack,dessert',
-            'image' => 'nullable|image|max:2048',
-            'is_available' => 'boolean',
-        ]);
-
-        if ($request->hasFile('image')) {
-            // Delete old image
-            if ($menu->image) {
-                Storage::disk('public')->delete($menu->image);
-            }
-            $validated['image'] = $request->file('image')->store('menus', 'public');
-        }
-
-        $menu->update($validated);
+        $menu->update($request->validated());
 
         return response()->json([
             'success' => true,
@@ -190,11 +158,6 @@ class MenuController extends Controller
     )]
     public function destroy(Menu $menu)
     {
-        // Delete image if exists
-        if ($menu->image) {
-            Storage::disk('public')->delete($menu->image);
-        }
-
         $menu->delete();
 
         return response()->json([
