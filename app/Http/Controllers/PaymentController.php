@@ -4,12 +4,134 @@ namespace App\Http\Controllers;
 
 use App\Models\Payment;
 use App\Models\Order;
+use App\Models\OrderSession;
+use App\Http\Requests\StorePaymentRequest;
+use App\Http\Requests\BulkPaymentRequest;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use OpenApi\Attributes as OA;
 
 class PaymentController extends Controller
 {
+    #[OA\Post(
+        path: "/api/payments/bulk",
+        tags: ["Payments"],
+        summary: "Pay all orders in a session (customer) at once",
+        security: [["bearerAuth" => []]],
+        requestBody: new OA\RequestBody(
+            required: true,
+            content: new OA\JsonContent(
+                required: ["session_id", "payment_method", "amount"],
+                properties: [
+                    new OA\Property(property: "session_id", type: "integer", description: "Order session ID"),
+                    new OA\Property(property: "payment_method", type: "string", enum: ["cash", "card", "qris", "gopay", "ovo", "dana"]),
+                    new OA\Property(property: "amount", type: "number", example: 300000),
+                    new OA\Property(property: "reference_number", type: "string"),
+                    new OA\Property(property: "notes", type: "string")
+                ]
+            )
+        ),
+        responses: [
+            new OA\Response(response: 200, description: "Bulk payment processed successfully")
+        ]
+    )]
+    public function bulkPayment(BulkPaymentRequest $request)
+    {
+        $validated = $request->validated();
+
+        $session = OrderSession::with('orders')->findOrFail($validated['session_id']);
+
+        // Get all unpaid orders in this session
+        $orders = $session->orders()
+            ->where('payment_status', 'unpaid')
+            ->whereNotIn('status', ['cancelled'])
+            ->get();
+
+        if ($orders->isEmpty()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'No unpaid orders found in this session',
+            ], 404);
+        }
+
+        // Calculate total from all orders
+        $totalAmount = $orders->sum('total');
+
+        if ($validated['amount'] < $totalAmount) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Payment amount must be at least ' . $totalAmount . ' (total from ' . $orders->count() . ' orders)',
+            ], 400);
+        }
+
+        DB::beginTransaction();
+        try {
+            $payments = [];
+            
+            foreach ($orders as $order) {
+                $payment = $order->payments()->create([
+                    'payment_method' => $validated['payment_method'],
+                    'amount' => $order->total,
+                    'status' => 'completed',
+                    'reference_number' => $validated['reference_number'] ?? null,
+                    'notes' => $validated['notes'] ?? null,
+                    'paid_at' => now(),
+                ]);
+                
+                $order->update(['payment_status' => 'paid']);
+                $payments[] = $payment;
+            }
+
+            // Auto-complete session since all orders are now paid
+            // Close all orders that are not already closed
+            foreach ($session->orders as $order) {
+                if (!in_array($order->status, ['closed', 'cancelled'])) {
+                    $order->update([
+                        'status' => 'closed',
+                        'closed_at' => now(),
+                        'cashier_id' => $request->user()->id,
+                    ]);
+                }
+            }
+            
+            // Mark session as completed
+            $session->update([
+                'status' => 'completed',
+                'ended_at' => now(),
+            ]);
+            
+            // Mark table as available
+            $session->table->markAsAvailable();
+
+            DB::commit();
+
+            // Generate receipt URL
+            $receiptUrl = route('api.order-sessions.receipt', $session->id);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Pembayaran ' . $orders->count() . ' order berhasil',
+                'data' => [
+                    'session' => $session->fresh(),
+                    'orders_paid' => $orders->count(),
+                    'total_amount' => $totalAmount,
+                    'payments' => $payments,
+                    'change' => $validated['payment_method'] === 'cash'
+                        ? $validated['amount'] - $totalAmount
+                        : 0,
+                    'session_completed' => true,
+                    'receipt_url' => $receiptUrl,
+                ],
+            ]);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return response()->json([
+                'success' => false,
+                'message' => 'Pembayaran gagal: ' . $e->getMessage(),
+            ], 500);
+        }
+    }
+
     #[OA\Post(
         path: "/api/orders/{order}/payments",
         tags: ["Payments"],
@@ -34,14 +156,12 @@ class PaymentController extends Controller
             new OA\Response(response: 200, description: "Payment processed successfully")
         ]
     )]
-    public function store(Request $request, Order $order)
+    public function store(StorePaymentRequest $request, Order $order)
     {
-        $validated = $request->validate([
-            'payment_method' => 'required|in:cash,card,qris,gopay,ovo,dana',
-            'amount' => 'required|numeric|min:0',
-            'reference_number' => 'nullable|string|max:50',
-            'notes' => 'nullable|string',
-        ]);
+        $validated = $request->validated();
+
+        // Override order_id with route parameter
+        $validated['order_id'] = $order->id;
 
         if ($order->payment_status === 'paid') {
             return response()->json([
@@ -50,20 +170,25 @@ class PaymentController extends Controller
             ], 400);
         }
 
-        if ($order->status !== 'closed') {
+        if ($order->status === 'cancelled') {
             return response()->json([
                 'success' => false,
-                'message' => 'Order harus ditutup dulu sebelum pembayaran',
+                'message' => 'Cannot add payment to cancelled order',
             ], 400);
         }
 
-        $totalPaid = $order->payments()->where('status', 'completed')->sum('amount');
-        $remaining = $order->total - $totalPaid;
-
-        if ($validated['amount'] > $remaining) {
+        if ($order->items()->count() === 0) {
             return response()->json([
                 'success' => false,
-                'message' => 'Jumlah pembayaran melebihi sisa tagihan',
+                'message' => 'Cannot add payment to order without items',
+            ], 400);
+        }
+
+        // Payment must be at least the order total
+        if ($validated['amount'] < $order->total) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Payment amount must be at least ' . $order->total,
             ], 400);
         }
 
@@ -78,29 +203,51 @@ class PaymentController extends Controller
                 'paid_at' => now(),
             ]);
 
-            $totalPaid += $payment->amount;
+            // Mark order as paid
+            $order->update(['payment_status' => 'paid']);
 
-            if ($totalPaid >= $order->total) {
-                $order->update(['payment_status' => 'paid']);
-
-                if ($order->table) {
-                    $order->table->markAsAvailable();
+            // Check if all orders in session are paid, then auto-complete session
+            $session = $order->orderSession;
+            if ($session && !$session->hasUnpaidOrders()) {
+                // Close all orders that are not already closed
+                foreach ($session->orders as $sessionOrder) {
+                    if (!in_array($sessionOrder->status, ['closed', 'cancelled'])) {
+                        $sessionOrder->update([
+                            'status' => 'closed',
+                            'closed_at' => now(),
+                            'cashier_id' => $request->user()->id,
+                        ]);
+                    }
                 }
-            } else {
-                $order->update(['payment_status' => 'partial']);
+                
+                // Mark session as completed
+                $session->update([
+                    'status' => 'completed',
+                    'ended_at' => now(),
+                ]);
+                
+                // Mark table as available
+                $session->table->markAsAvailable();
             }
 
             DB::commit();
+
+            // Generate receipt PDF if session completed
+            $receiptUrl = null;
+            if ($session && $session->fresh()->status === 'completed') {
+                $receiptUrl = route('api.order-sessions.receipt', $session->id);
+            }
 
             return response()->json([
                 'success' => true,
                 'message' => 'Pembayaran berhasil',
                 'data' => [
                     'payment' => $payment,
-                    'remaining' => max(0, $order->total - $totalPaid),
                     'change' => $validated['payment_method'] === 'cash'
-                        ? max(0, $validated['amount'] - $remaining)
+                        ? $validated['amount'] - $order->total
                         : 0,
+                    'session_completed' => $session && $session->fresh()->status === 'completed',
+                    'receipt_url' => $receiptUrl,
                 ],
             ]);
         } catch (\Exception $e) {
@@ -137,6 +284,83 @@ class PaymentController extends Controller
                 'remaining' => max(0, $order->total - $totalPaid),
                 'order_total' => $order->total,
             ],
+        ]);
+    }
+
+    #[OA\Get(
+        path: "/api/payments",
+        tags: ["Payments"],
+        summary: "Get all payments grouped by order session",
+        security: [["bearerAuth" => []]],
+        parameters: [
+            new OA\Parameter(name: "date", in: "query", required: false, schema: new OA\Schema(type: "string", format: "date")),
+            new OA\Parameter(name: "payment_method", in: "query", required: false, schema: new OA\Schema(type: "string")),
+            new OA\Parameter(name: "status", in: "query", required: false, schema: new OA\Schema(type: "string", enum: ["completed", "refunded"]))
+        ],
+        responses: [
+            new OA\Response(response: 200, description: "Payments retrieved successfully")
+        ]
+    )]
+    public function all(Request $request)
+    {
+        $query = Payment::with(['order.orderSession.table', 'order.waiter']);
+
+        if ($request->has('date')) {
+            $query->whereDate('created_at', $request->date);
+        }
+
+        if ($request->has('payment_method')) {
+            $query->where('payment_method', $request->payment_method);
+        }
+
+        if ($request->has('status')) {
+            $query->where('status', $request->status);
+        }
+
+        $payments = $query->latest()->get();
+
+        // Group payments by order session
+        $groupedBySession = $payments->groupBy(function($payment) {
+            return $payment->order->order_session_id;
+        })->map(function($sessionPayments) {
+            $firstPayment = $sessionPayments->first();
+            $session = $firstPayment->order->orderSession;
+            
+            return [
+                'session_id' => $session->id,
+                'customer_name' => $session->customer_name,
+                'table_number' => $session->table->table_number,
+                'session_started_at' => $session->started_at,
+                'session_status' => $session->status,
+                'orders_count' => $session->orders->count(),
+                'total_amount' => $sessionPayments->sum('amount'),
+                'payment_method' => $sessionPayments->first()->payment_method,
+                'paid_at' => $sessionPayments->first()->paid_at,
+                'payments' => $sessionPayments->map(function($payment) {
+                    return [
+                        'id' => $payment->id,
+                        'order_number' => $payment->order->order_number,
+                        'amount' => $payment->amount,
+                        'payment_method' => $payment->payment_method,
+                        'status' => $payment->status,
+                        'reference_number' => $payment->reference_number,
+                        'paid_at' => $payment->paid_at,
+                    ];
+                }),
+                'waiter_name' => $firstPayment->order->waiter->name ?? null,
+            ];
+        })->values();
+
+        $summary = [
+            'total_amount' => $payments->sum('amount'),
+            'total_sessions' => $groupedBySession->count(),
+            'total_payments' => $payments->count(),
+        ];
+
+        return response()->json([
+            'success' => true,
+            'data' => $groupedBySession,
+            'summary' => $summary,
         ]);
     }
 
@@ -193,8 +417,6 @@ class PaymentController extends Controller
 
             if ($totalPaid == 0) {
                 $order->update(['payment_status' => 'unpaid']);
-            } elseif ($totalPaid < $order->total) {
-                $order->update(['payment_status' => 'partial']);
             }
 
             DB::commit();
