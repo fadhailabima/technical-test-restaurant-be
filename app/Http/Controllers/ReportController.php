@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\Order;
 use App\Models\Menu;
 use App\Models\OrderItem;
+use App\Models\OrderSession;
 use App\Models\Payment;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -12,6 +13,97 @@ use OpenApi\Attributes as OA;
 
 class ReportController extends Controller
 {
+    #[OA\Get(
+        path: "/api/reports/dashboard",
+        tags: ["Reports"],
+        summary: "Get dashboard overview with real-time data",
+        security: [["bearerAuth" => []]],
+        responses: [
+            new OA\Response(response: 200, description: "Dashboard data retrieved successfully")
+        ]
+    )]
+    public function dashboard(Request $request)
+    {
+        $today = now()->toDateString();
+        
+        // Today's statistics
+        $todayOrders = Order::whereDate('created_at', $today)
+            ->where('status', 'closed')
+            ->selectRaw('COUNT(*) as count, SUM(total) as revenue')
+            ->first();
+        
+        // Active sessions with orders
+        $activeSessions = OrderSession::where('status', 'active')
+            ->with(['table', 'orders' => function($query) {
+                $query->with('items.menu')->latest();
+            }])
+            ->get()
+            ->map(function($session) {
+                return [
+                    'session_id' => $session->id,
+                    'customer_name' => $session->customer_name,
+                    'table_number' => $session->table->table_number,
+                    'started_at' => $session->started_at,
+                    'orders_count' => $session->orders->count(),
+                    'total_amount' => $session->orders->sum('total'),
+                    'paid_amount' => $session->orders->where('payment_status', 'paid')->sum('total'),
+                    'latest_order_status' => $session->orders->first()?->status,
+                    'orders' => $session->orders,
+                ];
+            });
+        
+        // Current orders status breakdown
+        $orderStatusBreakdown = Order::whereHas('orderSession', function($query) {
+                $query->where('status', 'active');
+            })
+            ->select('status', DB::raw('COUNT(*) as count'))
+            ->groupBy('status')
+            ->get()
+            ->pluck('count', 'status');
+        
+        // Tables status
+        $tablesStatus = DB::table('tables')
+            ->select('status', DB::raw('COUNT(*) as count'))
+            ->groupBy('status')
+            ->get()
+            ->pluck('count', 'status');
+        
+        // Recent completed orders (last 10)
+        $recentOrders = Order::where('status', 'closed')
+            ->with(['orderSession.table', 'items.menu', 'payments'])
+            ->latest('closed_at')
+            ->limit(10)
+            ->get()
+            ->map(function($order) {
+                return [
+                    'order_number' => $order->order_number,
+                    'customer_name' => $order->customer_name,
+                    'table_number' => $order->table->table_number,
+                    'total' => $order->total,
+                    'closed_at' => $order->closed_at,
+                ];
+            });
+        
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'today' => [
+                    'orders_count' => $todayOrders->count ?? 0,
+                    'revenue' => $todayOrders->revenue ?? 0,
+                ],
+                'active_sessions' => $activeSessions,
+                'orders_status' => $orderStatusBreakdown,
+                'tables_status' => $tablesStatus,
+                'recent_orders' => $recentOrders,
+                'summary' => [
+                    'active_customers' => $activeSessions->count(),
+                    'pending_orders' => $orderStatusBreakdown->get('open', 0) + $orderStatusBreakdown->get('preparing', 0),
+                    'occupied_tables' => $tablesStatus->get('occupied', 0),
+                ],
+            ],
+        ]);
+    }
+
     #[OA\Get(
         path: "/api/reports/daily-sales",
         tags: ["Reports"],
@@ -30,12 +122,11 @@ class ReportController extends Controller
 
         $orders = Order::whereDate('created_at', $date)
             ->where('status', 'closed')
-            ->with(['items.menu', 'payments'])
+            ->with(['orderSession.table', 'items.menu', 'payments'])
             ->get();
 
         $totalOrders = $orders->count();
         $totalRevenue = $orders->sum('total');
-        $totalDiscount = $orders->sum('discount_amount');
         $totalTax = $orders->sum('tax');
 
         $paymentMethods = Payment::whereHas('order', function ($query) use ($date) {
@@ -52,9 +143,8 @@ class ReportController extends Controller
                 'date' => $date,
                 'total_orders' => $totalOrders,
                 'total_revenue' => $totalRevenue,
-                'total_discount' => $totalDiscount,
                 'total_tax' => $totalTax,
-                'gross_sales' => $totalRevenue + $totalDiscount,
+                'gross_sales' => $totalRevenue,
                 'payment_methods' => $paymentMethods,
                 'orders' => $orders,
             ],
@@ -125,20 +215,19 @@ class ReportController extends Controller
         $groupBy = $request->input('group_by', 'day');
 
         $dateFormat = match ($groupBy) {
-            'hour' => '%Y-%m-%d %H:00:00',
-            'day' => '%Y-%m-%d',
-            'week' => '%Y-%U',
-            'month' => '%Y-%m',
-            default => '%Y-%m-%d',
+            'hour' => 'YYYY-MM-DD HH24:00:00',
+            'day' => 'YYYY-MM-DD',
+            'week' => 'IYYY-IW',
+            'month' => 'YYYY-MM',
+            default => 'YYYY-MM-DD',
         };
 
-        $revenue = Order::whereBetween('created_at', [$startDate, $endDate])
+        $revenue = Order::whereBetween('created_at', [$startDate . ' 00:00:00', $endDate . ' 23:59:59'])
             ->where('status', 'closed')
             ->select(
-                DB::raw("DATE_FORMAT(created_at, '$dateFormat') as period"),
+                DB::raw("TO_CHAR(created_at, '$dateFormat') as period"),
                 DB::raw('COUNT(*) as total_orders'),
                 DB::raw('SUM(subtotal) as total_subtotal'),
-                DB::raw('SUM(discount_amount) as total_discount'),
                 DB::raw('SUM(tax) as total_tax'),
                 DB::raw('SUM(total) as total_revenue')
             )
@@ -149,7 +238,6 @@ class ReportController extends Controller
         $summary = [
             'total_orders' => $revenue->sum('total_orders'),
             'total_revenue' => $revenue->sum('total_revenue'),
-            'total_discount' => $revenue->sum('total_discount'),
             'average_order_value' => $revenue->sum('total_orders') > 0
                 ? $revenue->sum('total_revenue') / $revenue->sum('total_orders')
                 : 0,
@@ -210,6 +298,22 @@ class ReportController extends Controller
             ->with('cashier:id,name,email')
             ->get();
 
+        // Add customer insights from sessions
+        $sessionStats = DB::table('order_sessions')
+            ->join('orders', 'order_sessions.id', '=', 'orders.order_session_id')
+            ->whereBetween('orders.created_at', [$startDate, $endDate])
+            ->where('orders.status', 'closed')
+            ->select(
+                'order_sessions.customer_name',
+                DB::raw('COUNT(DISTINCT order_sessions.id) as total_sessions'),
+                DB::raw('COUNT(orders.id) as total_orders'),
+                DB::raw('SUM(orders.total) as total_spent')
+            )
+            ->groupBy('order_sessions.customer_name')
+            ->orderByDesc('total_spent')
+            ->limit(10)
+            ->get();
+
         return response()->json([
             'success' => true,
             'data' => [
@@ -219,6 +323,7 @@ class ReportController extends Controller
                 ],
                 'waiters' => $waiterPerformance,
                 'cashiers' => $cashierPerformance,
+                'top_customers' => $sessionStats,
             ],
         ]);
     }
@@ -293,13 +398,19 @@ class ReportController extends Controller
             ->first();
 
         $openOrders = Order::where('status', 'open')->count();
-        $activeDiscount = DB::table('discounts')
-            ->where('is_active', true)
-            ->where(function ($query) {
-                $query->whereNull('valid_until')
-                    ->orWhere('valid_until', '>=', now());
-            })
+        
+        // Active sessions (customers currently dining)
+        $activeSessions = DB::table('order_sessions')
+            ->where('status', 'active')
             ->count();
+        
+        // Tables currently occupied
+        $occupiedTables = DB::table('tables')
+            ->where('status', 'occupied')
+            ->count();
+        
+        // Pending orders (open or preparing)
+        $pendingOrders = Order::whereIn('status', ['open', 'preparing'])->count();
 
         return response()->json([
             'success' => true,
@@ -312,8 +423,12 @@ class ReportController extends Controller
                     'orders' => $monthStats->orders ?? 0,
                     'revenue' => $monthStats->revenue ?? 0,
                 ],
-                'open_orders' => $openOrders,
-                'active_discounts' => $activeDiscount,
+                'current' => [
+                    'open_orders' => $openOrders,
+                    'pending_orders' => $pendingOrders,
+                    'active_sessions' => $activeSessions,
+                    'occupied_tables' => $occupiedTables,
+                ],
             ],
         ]);
     }
