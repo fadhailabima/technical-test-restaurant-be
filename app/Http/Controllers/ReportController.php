@@ -171,8 +171,8 @@ class ReportController extends Controller
                 ->map(function($order) {
                     return [
                         'order_number' => $order->order_number,
-                        'customer_name' => $order->customer_name,
-                        'table_number' => $order->table->table_number,
+                        'customer_name' => $order->orderSession->customer_name ?? null,
+                        'table_number' => $order->orderSession->table->table_number ?? null,
                         'status' => $order->status,
                         'items_count' => $order->items->count(),
                         'created_at' => $order->opened_at,
@@ -209,8 +209,8 @@ class ReportController extends Controller
                 ->map(function($order) {
                     return [
                         'order_number' => $order->order_number,
-                        'customer_name' => $order->customer_name,
-                        'table_number' => $order->table->table_number,
+                        'customer_name' => $order->orderSession->customer_name ?? null,
+                        'table_number' => $order->orderSession->table->table_number ?? null,
                         'total' => $order->total,
                         'closed_at' => $order->closed_at,
                     ];
