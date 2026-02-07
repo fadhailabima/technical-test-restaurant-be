@@ -13,7 +13,6 @@ return new class extends Migration {
             $table->text('description')->nullable();
             $table->decimal('price', 10, 2);
             $table->string('category', 20)->default('makanan');
-            $table->string('image')->nullable();
             $table->boolean('is_available')->default(true);
             $table->timestamps();
 

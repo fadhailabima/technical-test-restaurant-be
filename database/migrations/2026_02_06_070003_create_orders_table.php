@@ -11,9 +11,11 @@ return new class extends Migration {
             $table->id();
             $table->string('order_number')->unique();
             $table->foreignId('table_id')->constrained('tables')->cascadeOnDelete();
+            $table->string('customer_name')->nullable();
             $table->foreignId('waiter_id')->constrained('users')->cascadeOnDelete();
             $table->foreignId('cashier_id')->nullable()->constrained('users')->nullOnDelete();
             $table->string('status', 20)->default('open');
+            $table->string('payment_status', 20)->default('unpaid');
             $table->decimal('subtotal', 10, 2)->default(0);
             $table->decimal('tax', 10, 2)->default(0);
             $table->decimal('total', 10, 2)->default(0);
