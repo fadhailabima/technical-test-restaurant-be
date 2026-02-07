@@ -5,6 +5,7 @@ use App\Http\Controllers\AuthController;
 use App\Http\Controllers\MenuController;
 use App\Http\Controllers\TableController;
 use App\Http\Controllers\OrderController;
+use App\Http\Controllers\OrderSessionController;
 use App\Http\Controllers\PaymentController;
 use App\Http\Controllers\ReportController;
 
@@ -22,23 +23,31 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('orders', [OrderController::class, 'index']);
     Route::get('orders/{order}', [OrderController::class, 'show']);
 
+    // Order Sessions - View accessible by all
+    Route::get('order-sessions', [OrderSessionController::class, 'index']);
+    Route::get('order-sessions/{session}', [OrderSessionController::class, 'show']);
+    Route::get('order-sessions/{session}/receipt', [OrderSessionController::class, 'generateReceipt'])->name('api.order-sessions.receipt');
+
     // Pelayan (Waiter) only routes
-    Route::middleware('role:Pelayan')->group(function () {
+    Route::middleware('role:pelayan')->group(function () {
         Route::post('orders/open', [OrderController::class, 'openOrder']);
         Route::post('orders/{order}/items', [OrderController::class, 'addItem']);
-        Route::delete('orders/{order}/items/{orderItem}', [OrderController::class, 'removeItem']);
-        Route::patch('orders/{order}/status', [OrderController::class, 'updateStatus']);
+        Route::match(['patch', 'put', 'post'], 'orders/{order}/status', [OrderController::class, 'updateStatus']);
     });
 
     // Kasir (Cashier) only routes
-    Route::middleware('role:Kasir')->group(function () {
+    Route::middleware('role:kasir')->group(function () {
         Route::post('orders/{order}/close', [OrderController::class, 'closeOrder']);
         Route::get('orders/{order}/receipt', [OrderController::class, 'generateReceipt']);
 
         Route::post('orders/{order}/payments', [PaymentController::class, 'store']);
         Route::get('orders/{order}/payments', [PaymentController::class, 'index']);
-        Route::post('orders/{order}/payments/{payment}/refund', [PaymentController::class, 'refund']);
+        Route::post('payments/bulk', [PaymentController::class, 'bulkPayment']);
+        Route::get('payments', [PaymentController::class, 'all']);
 
+        Route::post('order-sessions/{session}/complete', [OrderSessionController::class, 'complete']);
+
+        Route::get('reports/dashboard', [ReportController::class, 'dashboard']);
         Route::get('reports/daily-sales', [ReportController::class, 'dailySales']);
         Route::get('reports/best-sellers', [ReportController::class, 'bestSellers']);
         Route::get('reports/revenue', [ReportController::class, 'revenue']);
