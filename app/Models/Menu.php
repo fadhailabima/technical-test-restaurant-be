@@ -11,7 +11,6 @@ use Illuminate\Database\Eloquent\Model;
  * @property string|null $description
  * @property string $price
  * @property string $category
- * @property string|null $image
  * @property bool $is_available
  * @property \Carbon\Carbon|null $created_at
  * @property \Carbon\Carbon|null $updated_at
@@ -25,7 +24,6 @@ class Menu extends Model
         'description',
         'price',
         'category',
-        'image',
         'is_available',
     ];
 

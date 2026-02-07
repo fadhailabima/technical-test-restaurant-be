@@ -40,12 +40,19 @@ class Table extends Model
 
     public function orders()
     {
-        return $this->hasMany(Order::class);
+        return $this->hasManyThrough(Order::class, OrderSession::class);
+    }
+
+    public function orderSessions()
+    {
+        return $this->hasMany(OrderSession::class);
     }
 
     public function currentOrder()
     {
-        return $this->hasOne(Order::class)->where('status', 'open')->latest();
+        return $this->hasManyThrough(Order::class, OrderSession::class)
+            ->where('orders.status', 'open')
+            ->latest();
     }
 
     public function isAvailable(): bool
@@ -60,6 +67,13 @@ class Table extends Model
 
     public function markAsAvailable()
     {
-        $this->update(['status' => 'available']);
+        // Only mark as available if ALL sessions on this table are completed
+        $hasActiveSessions = $this->orderSessions()
+            ->where('status', 'active')
+            ->exists();
+
+        if (!$hasActiveSessions) {
+            $this->update(['status' => 'available']);
+        }
     }
 }

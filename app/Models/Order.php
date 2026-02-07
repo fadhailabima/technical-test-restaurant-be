@@ -8,7 +8,7 @@ use Illuminate\Database\Eloquent\Model;
 /**
  * @property int $id
  * @property string $order_number
- * @property int $table_id
+ * @property int $order_session_id
  * @property int $waiter_id
  * @property int|null $cashier_id
  * @property string $status
@@ -27,7 +27,7 @@ class Order extends Model
 
     protected $fillable = [
         'order_number',
-        'table_id',
+        'order_session_id',
         'waiter_id',
         'cashier_id',
         'status',
@@ -47,7 +47,7 @@ class Order extends Model
         'closed_at' => 'datetime',
     ];
 
-    protected $with = ['table', 'waiter'];
+    protected $with = ['orderSession.table', 'waiter'];
 
     protected static function boot()
     {
@@ -59,16 +59,21 @@ class Order extends Model
                 $order->status = 'open';
             }
 
-            $validPaymentStatuses = ['unpaid', 'partial', 'paid'];
+            $validPaymentStatuses = ['unpaid', 'paid'];
             if (isset($order->payment_status) && !in_array($order->payment_status, $validPaymentStatuses)) {
                 $order->payment_status = 'unpaid';
             }
         });
     }
 
+    public function orderSession()
+    {
+        return $this->belongsTo(OrderSession::class);
+    }
+
     public function table()
     {
-        return $this->belongsTo(Table::class);
+        return $this->hasOneThrough(Table::class, OrderSession::class, 'id', 'id', 'order_session_id', 'table_id');
     }
 
     public function waiter()
@@ -122,5 +127,21 @@ class Order extends Model
         $sequence = $lastOrder ? (intval(substr($lastOrder->order_number, -4)) + 1) : 1;
 
         return $date . str_pad($sequence, 4, '0', STR_PAD_LEFT);
+    }
+
+    // Attribute accessors for backward compatibility
+    public function getTableAttribute()
+    {
+        return $this->orderSession ? $this->orderSession->table : null;
+    }
+
+    public function getCustomerNameAttribute()
+    {
+        return $this->orderSession ? $this->orderSession->customer_name : null;
+    }
+
+    public function getTableIdAttribute()
+    {
+        return $this->orderSession ? $this->orderSession->table_id : null;
     }
 }
