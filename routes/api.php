@@ -35,6 +35,12 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::match(['patch', 'put', 'post'], 'orders/{order}/status', [OrderController::class, 'updateStatus']);
     });
 
+    // Shared routes for both Pelayan & Kasir
+    Route::middleware('role:pelayan,kasir')->group(function () {
+        Route::get('payments', [PaymentController::class, 'all']);
+        Route::get('reports/staff-dashboard', [ReportController::class, 'staffDashboard']);
+    });
+
     // Kasir (Cashier) only routes
     Route::middleware('role:kasir')->group(function () {
         Route::post('orders/{order}/close', [OrderController::class, 'closeOrder']);
@@ -43,12 +49,10 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('orders/{order}/payments', [PaymentController::class, 'store']);
         Route::get('orders/{order}/payments', [PaymentController::class, 'index']);
         Route::post('payments/bulk', [PaymentController::class, 'bulkPayment']);
-        Route::get('payments', [PaymentController::class, 'all']);
 
         Route::post('order-sessions/{session}/complete', [OrderSessionController::class, 'complete']);
 
         Route::get('reports/dashboard', [ReportController::class, 'dashboard']);
-        Route::get('reports/staff-dashboard', [ReportController::class, 'staffDashboard']);
         Route::get('reports/daily-sales', [ReportController::class, 'dailySales']);
         Route::get('reports/best-sellers', [ReportController::class, 'bestSellers']);
         Route::get('reports/revenue', [ReportController::class, 'revenue']);
