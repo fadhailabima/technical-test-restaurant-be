@@ -171,16 +171,33 @@ class ReportController extends Controller
         $endDate = $request->input('end_date', now()->toDateString());
         $limit = $request->input('limit', 10);
 
+        // Get best sellers from completed & paid orders only
         $bestSellers = OrderItem::whereHas('order', function ($query) use ($startDate, $endDate) {
             $query->whereBetween('created_at', [$startDate, $endDate])
-                ->where('status', 'closed');
+                ->where('status', 'closed')
+                ->where('payment_status', 'paid'); // Only count paid orders
         })
             ->select('menu_id', DB::raw('SUM(quantity) as total_quantity'), DB::raw('SUM(subtotal) as total_revenue'))
             ->groupBy('menu_id')
             ->orderByDesc('total_quantity')
             ->limit($limit)
-            ->with('menu')
-            ->get();
+            ->with(['menu' => function ($query) {
+                $query->select('id', 'name', 'category', 'price');
+            }])
+            ->get()
+            ->map(function ($item) {
+                return [
+                    'menu_id' => $item->menu_id,
+                    'menu_name' => $item->menu->name,
+                    'category' => $item->menu->category,
+                    'price' => $item->menu->price,
+                    'total_quantity' => (int) $item->total_quantity,
+                    'total_revenue' => (float) $item->total_revenue,
+                    'average_price' => $item->total_quantity > 0 
+                        ? round($item->total_revenue / $item->total_quantity, 2)
+                        : 0,
+                ];
+            });
 
         return response()->json([
             'success' => true,
@@ -190,6 +207,7 @@ class ReportController extends Controller
                     'end' => $endDate,
                 ],
                 'best_sellers' => $bestSellers,
+                'total_items' => $bestSellers->count(),
             ],
         ]);
     }
