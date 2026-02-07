@@ -4,8 +4,10 @@ namespace App\Http\Controllers;
 
 use App\Models\Order;
 use App\Models\OrderItem;
+use App\Models\OrderSession;
 use App\Models\Table;
 use App\Models\Menu;
+use App\Http\Requests\StoreOrderRequest;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Barryvdh\DomPDF\Facade\Pdf;
@@ -30,7 +32,7 @@ class OrderController extends Controller
     )]
     public function index(Request $request)
     {
-        $query = Order::with(['table', 'waiter', 'cashier', 'items.menu']);
+        $query = Order::with(['orderSession.table', 'waiter', 'cashier', 'items.menu']);
 
         if ($request->has('status')) {
             $query->where('status', $request->status);
@@ -66,7 +68,20 @@ class OrderController extends Controller
             content: new OA\JsonContent(
                 required: ["table_id"],
                 properties: [
-                    new OA\Property(property: "table_id", type: "integer", example: 1)
+                    new OA\Property(property: "table_id", type: "integer", example: 1),
+                    new OA\Property(property: "customer_name", type: "string", example: "Samuel"),
+                    new OA\Property(
+                        property: "items",
+                        type: "array",
+                        items: new OA\Items(
+                            type: "object",
+                            properties: [
+                                new OA\Property(property: "menu_id", type: "integer", example: 1),
+                                new OA\Property(property: "quantity", type: "integer", example: 2),
+                                new OA\Property(property: "notes", type: "string", example: "pedas")
+                            ]
+                        )
+                    )
                 ]
             )
         ),
@@ -74,43 +89,62 @@ class OrderController extends Controller
             new OA\Response(response: 201, description: "Order opened successfully")
         ]
     )]
-    public function openOrder(Request $request)
+    public function openOrder(StoreOrderRequest $request)
     {
-        $validated = $request->validate([
-            'table_id' => 'required|exists:tables,id',
-        ]);
+        $validated = $request->validated();
 
         $table = Table::findOrFail($validated['table_id']);
 
-        // Check if table is available
-        if (!$table->isAvailable()) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Table is not available',
-            ], 422);
-        }
-
-        // Check if table already has open order
-        $existingOrder = Order::where('table_id', $table->id)
-            ->where('status', 'open')
-            ->exists();
-
-        if ($existingOrder) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Table already has an open order',
-            ], 422);
-        }
-
         DB::beginTransaction();
         try {
+            // Find or create order session for this customer at this table
+            $session = OrderSession::firstOrCreate(
+                [
+                    'table_id' => $table->id,
+                    'customer_name' => $validated['customer_name'],
+                    'status' => 'active',
+                ],
+                [
+                    'started_at' => now(),
+                ]
+            );
+
+            // Check if the latest order in this session is at least ready
+            $latestOrder = $session->orders()->orderBy('created_at', 'desc')->first();
+            
+            if ($latestOrder && in_array($latestOrder->status, ['open', 'preparing'])) {
+                DB::rollBack();
+                return response()->json([
+                    'message' => 'Cannot create new order. Latest order ('. $latestOrder->order_number .') is still in '. $latestOrder->status .' status. Please wait until it is at least ready.'
+                ], 422);
+            }
+
             $order = Order::create([
                 'order_number' => Order::generateOrderNumber(),
-                'table_id' => $table->id,
+                'order_session_id' => $session->id,
                 'waiter_id' => $request->user()->id,
                 'status' => 'open',
                 'opened_at' => now(),
             ]);
+
+            // Add items if provided
+            if (!empty($validated['items'])) {
+                foreach ($validated['items'] as $item) {
+                    $menu = Menu::findOrFail($item['menu_id']);
+                    $subtotal = $menu->price * $item['quantity'];
+
+                    $order->items()->create([
+                        'menu_id' => $menu->id,
+                        'quantity' => $item['quantity'],
+                        'price' => $menu->price,
+                        'subtotal' => $subtotal,
+                        'notes' => $item['notes'] ?? null,
+                    ]);
+                }
+
+                // Recalculate order totals
+                $order->calculateTotals();
+            }
 
             $table->markAsOccupied();
 
@@ -119,7 +153,7 @@ class OrderController extends Controller
             return response()->json([
                 'success' => true,
                 'message' => 'Order opened successfully',
-                'data' => $order->load(['table', 'waiter']),
+                'data' => $order->load(['orderSession.table', 'waiter', 'items.menu']),
             ], 201);
         } catch (\Exception $e) {
             DB::rollBack();
@@ -145,7 +179,7 @@ class OrderController extends Controller
     )]
     public function show(Order $order)
     {
-        $order->load(['table', 'waiter', 'cashier', 'discount', 'payments', 'items.menu']);
+        $order->load(['orderSession.table', 'waiter', 'cashier', 'payments', 'items.menu']);
 
         return response()->json([
             'success' => true,
@@ -321,6 +355,14 @@ class OrderController extends Controller
             ], 422);
         }
 
+        // Check if order is fully paid
+        if ($order->payment_status !== 'paid') {
+            return response()->json([
+                'success' => false,
+                'message' => 'Cannot close order. Payment must be completed first',
+            ], 422);
+        }
+
         DB::beginTransaction();
         try {
             $order->update([
@@ -329,14 +371,24 @@ class OrderController extends Controller
                 'closed_at' => now(),
             ]);
 
-            $order->table->markAsAvailable();
+            // Check if session can be completed (all orders closed)
+            $session = $order->orderSession;
+            if ($session && $session->allOrdersClosed()) {
+                $session->update([
+                    'status' => 'completed',
+                    'ended_at' => now(),
+                ]);
+                
+                // Mark table as available
+                $session->table->markAsAvailable();
+            }
 
             DB::commit();
 
             return response()->json([
                 'success' => true,
                 'message' => 'Order closed successfully',
-                'data' => $order->load(['table', 'waiter', 'cashier', 'items.menu']),
+                'data' => $order->load(['orderSession.table', 'waiter', 'cashier', 'items.menu']),
             ]);
         } catch (\Exception $e) {
             DB::rollBack();
@@ -369,7 +421,7 @@ class OrderController extends Controller
             ], 422);
         }
 
-        $order->load(['table', 'waiter', 'cashier', 'discount', 'payments', 'items.menu']);
+        $order->load(['orderSession.table', 'waiter', 'cashier', 'payments', 'items.menu']);
 
         $pdf = Pdf::loadView('receipts.order', ['order' => $order]);
 
@@ -415,7 +467,7 @@ class OrderController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'Order status updated successfully',
-            'data' => $order->fresh(['table', 'waiter', 'cashier', 'discount', 'items.menu']),
+            'data' => $order->fresh(['orderSession.table', 'waiter', 'cashier', 'items.menu']),
         ]);
     }
 }
