@@ -105,6 +105,146 @@ class ReportController extends Controller
     }
 
     #[OA\Get(
+        path: "/api/reports/staff-dashboard",
+        tags: ["Reports"],
+        summary: "Get dashboard for staff (pelayan/kasir)",
+        security: [["bearerAuth" => []]],
+        responses: [
+            new OA\Response(response: 200, description: "Staff dashboard data retrieved successfully")
+        ]
+    )]
+    public function staffDashboard(Request $request)
+    {
+        $user = $request->user();
+        $today = now()->toDateString();
+
+        // Active sessions - semua yang sedang berjalan
+        $activeSessions = OrderSession::where('status', 'active')
+            ->count();
+
+        // Total orders hari ini
+        $totalOrders = Order::whereDate('created_at', $today)
+            ->count();
+
+        // Meja tersedia
+        $availableTables = DB::table('tables')
+            ->where('status', 'available')
+            ->count();
+
+        // Meja terisi (occupied)
+        $occupiedTables = DB::table('tables')
+            ->where('status', 'occupied')
+            ->count();
+
+        // Untuk pelayan - orders yang mereka tangani hari ini
+        if ($user->role === 'pelayan') {
+            $myOrders = Order::whereDate('created_at', $today)
+                ->where('waiter_id', $user->id)
+                ->count();
+
+            $myActiveSessions = OrderSession::where('status', 'active')
+                ->whereHas('orders', function($query) use ($user) {
+                    $query->where('waiter_id', $user->id);
+                })
+                ->with(['table', 'orders' => function($query) use ($user) {
+                    $query->where('waiter_id', $user->id)
+                        ->with('items.menu')
+                        ->latest();
+                }])
+                ->get()
+                ->map(function($session) {
+                    return [
+                        'session_id' => $session->id,
+                        'customer_name' => $session->customer_name,
+                        'table_number' => $session->table->table_number,
+                        'orders_count' => $session->orders->count(),
+                        'latest_order_status' => $session->orders->first()?->status,
+                        'total_amount' => $session->orders->sum('total'),
+                    ];
+                });
+
+            // Pending orders (perlu diproses)
+            $pendingOrders = Order::where('waiter_id', $user->id)
+                ->whereIn('status', ['open', 'preparing'])
+                ->with(['orderSession.table', 'items.menu'])
+                ->get()
+                ->map(function($order) {
+                    return [
+                        'order_number' => $order->order_number,
+                        'customer_name' => $order->customer_name,
+                        'table_number' => $order->table->table_number,
+                        'status' => $order->status,
+                        'items_count' => $order->items->count(),
+                        'created_at' => $order->opened_at,
+                    ];
+                });
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'active_sessions' => $activeSessions,
+                    'total_orders' => $totalOrders,
+                    'available_tables' => $availableTables,
+                    'occupied_tables' => $occupiedTables,
+                    'my_stats' => [
+                        'my_orders_today' => $myOrders,
+                        'my_active_sessions' => $myActiveSessions,
+                        'pending_orders' => $pendingOrders,
+                    ],
+                ],
+            ]);
+        }
+
+        // Untuk kasir - fokus ke payment
+        if ($user->role === 'kasir') {
+            $todayPayments = Payment::whereDate('created_at', $today)
+                ->where('cashier_id', $user->id)
+                ->selectRaw('COUNT(*) as count, SUM(amount) as total')
+                ->first();
+
+            $unpaidOrders = Order::where('payment_status', 'unpaid')
+                ->where('status', 'closed')
+                ->with(['orderSession.table'])
+                ->get()
+                ->map(function($order) {
+                    return [
+                        'order_number' => $order->order_number,
+                        'customer_name' => $order->customer_name,
+                        'table_number' => $order->table->table_number,
+                        'total' => $order->total,
+                        'closed_at' => $order->closed_at,
+                    ];
+                });
+
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'active_sessions' => $activeSessions,
+                    'total_orders' => $totalOrders,
+                    'available_tables' => $availableTables,
+                    'occupied_tables' => $occupiedTables,
+                    'cashier_stats' => [
+                        'payments_today' => $todayPayments->count ?? 0,
+                        'revenue_today' => $todayPayments->total ?? 0,
+                        'unpaid_orders' => $unpaidOrders,
+                    ],
+                ],
+            ]);
+        }
+
+        // Default response untuk role lain
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'active_sessions' => $activeSessions,
+                'total_orders' => $totalOrders,
+                'available_tables' => $availableTables,
+                'occupied_tables' => $occupiedTables,
+            ],
+        ]);
+    }
+
+    #[OA\Get(
         path: "/api/reports/daily-sales",
         tags: ["Reports"],
         summary: "Get daily sales report",

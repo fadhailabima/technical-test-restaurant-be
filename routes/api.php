@@ -48,6 +48,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('order-sessions/{session}/complete', [OrderSessionController::class, 'complete']);
 
         Route::get('reports/dashboard', [ReportController::class, 'dashboard']);
+        Route::get('reports/staff-dashboard', [ReportController::class, 'staffDashboard']);
         Route::get('reports/daily-sales', [ReportController::class, 'dailySales']);
         Route::get('reports/best-sellers', [ReportController::class, 'bestSellers']);
         Route::get('reports/revenue', [ReportController::class, 'revenue']);

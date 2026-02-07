@@ -1160,6 +1160,25 @@
                 ]
             }
         },
+        "/api/reports/staff-dashboard": {
+            "get": {
+                "tags": [
+                    "Reports"
+                ],
+                "summary": "Get dashboard for staff (pelayan/kasir)",
+                "operationId": "2eee2a39a63fec44317d6ad22ecb899b",
+                "responses": {
+                    "200": {
+                        "description": "Staff dashboard data retrieved successfully"
+                    }
+                },
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ]
+            }
+        },
         "/api/reports/daily-sales": {
             "get": {
                 "tags": [
